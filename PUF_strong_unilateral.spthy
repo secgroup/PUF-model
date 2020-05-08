@@ -1,0 +1,164 @@
+/******************************************************************************
+ * PUF unilateral protocol based on strong PUFs
+ *
+ * check with
+ * tamarin-prover --prove PUF_strong_unilateral.spthy 
+ *
+ * NOTE: secrecy does not hold has the protocol sends pufs in the clear
+ ******************************************************************************/
+
+theory PUF_strong_unilateral
+
+begin
+
+// PUF is private
+functions: spuf/2 [private]
+
+/*
+ * Strong PUF model
+ */
+rule PUF:
+  [ PUFin(D,c) ]   --[ PUF(D,c)   ]-> [ PUFout(D, c, spuf(D,c))   ]
+
+rule CRP:
+  [ CRPin(A,D), Fr(~c) ] --[ CRP(A,D,~c) ]-> [ !CRPout(A,D,~c,spuf(D,~c)) ]
+
+rule BreakPUF:
+  [ In(<D,c>) ] --[ BreakPUF(D,c) ]-> [ Out(spuf(D,c)) ]
+
+rule RevealCRP:
+  [ !CRPout(A,D,c,p) ] --[ RevealCRP(A,D,c) ]-> [ Out(<c,p>) ]
+
+rule Modeling:
+  [ In(<D,c,spuf(D,c1)>) ] --[ Model(D) ]-> [ Out(spuf(D,c)) ]
+
+/*
+ * Basic unilateral authentication.
+ *
+ * A -> D: c
+ * D -> A: spuf(D,c)
+ *
+ * Strong PUF is used to generate the response and is sent in the
+ * clear. Clearly, PUF secrecy will now hold.
+ * This only authenticates D to A.
+ */
+rule BuildWeakCRPs:
+  [  ] --> [ CRPin($A,$D) ] 
+
+rule Alice0:
+  [ ] --> [ Alice0($A) ]
+
+rule Alice1:
+  [ Alice0(A),!CRPout(A,D,c,r) ] 
+  --[ Run(A,D,<'AtoD',c, r>)  ]-> 
+  [ Out(<A,D,c>), Alice2(A,D,c,r) ]
+
+rule Alice2:
+  [ Alice2(A,D,c,r), In(<D,A,r>) ] 
+  --[ Commit(A,D,<'DtoA',c, r>) ]-> 
+  [  ]
+
+rule Don0:
+  [ ] --> [ Don0($D) ]
+  
+rule Don1:
+  [ In(<A,D,c>) ] 
+  --[ ]-> 
+  [ PUFin(D,c), Don2(D,A,c) ]
+
+rule Don2:
+  [ Don2(D,A,c), PUFout(D,c,r) ]
+  --[ Run(D,A,<'DtoA',c ,r>) ]-> // No Commit(D,A,<'AtoD',c,r>)
+  [ Out(<D,A,r>), Out(r) ]
+
+// ======================================
+
+/* 
+ * Initialization is before deployment
+ */
+restriction resCRPbeforePUF:
+  "All A D c1 c2 #i #j. CRP(A,D,c1)@i & PUF(D,c2)@j ==> i < j"
+
+/*
+ * CRPs are not reused
+ */
+restriction resCRPnotReuse:
+  "All A D x #i #j. Run(A,D,x)@i & Run(A,D,x)@j & (Ex c r. x = <'AtoD',c,r>) ==> #i = #j"
+
+/*
+ * sanity check: the protocol can run and commit from D to A
+ */
+lemma Sanity:
+  exists-trace
+  "
+  Ex A D c r  #i #j. Commit(A,D,<'DtoA',c,r>)@i & Run(D,A,<'DtoA',c,r>)@j 
+  & 
+  not (Ex A D c #k. RevealCRP(A,D,c)@k) 
+  & 
+  not (Ex D c #k. BreakPUF(D,c)@k)
+  &
+  not (Ex D #k. Model(D)@k )
+  "
+
+/*
+ * sanity check: modelling happens even without other attacks on PUF
+ * This implicitly means that secrecy does not hold
+ */
+lemma SanityPUFModel:
+  exists-trace
+  "Ex D #i. Model(D)@i & not (Ex A c #k. RevealCRP(A,D,c)@k) & not (Ex c #k. BreakPUF(D,c)@k)"
+
+/*
+ * Property: Secrecy of PUF with respect to A
+ * with A = {BreakPUF(D), RevealCRP(a,D), Model(D)}
+ *
+ * Intuition: This property does NOT hold since puf values
+ * are sent in the clear
+ */
+lemma Secrecy_A: 
+  "All D p c #i. K(p)@i & p = spuf(D,c) ==> 
+    (
+    (Ex c A #j.RevealCRP(A,D,c)@j & j<i ) // CRP for D is revealed by one server
+    |
+    (Ex c #j.BreakPUF(D,c)@j & j<i) // PUF for D is broken
+    |
+    (Ex #r. Model(D)@r & r<i)
+    )
+    "
+
+/*
+ * Property: Unilateral authentication of D to A
+ * with A = {RevealCRP(A,D,C), Model(D)}
+ *
+ * Improvements with respect to Weak PUFs
+ *
+ * 1. RevealCRP(A,D,C) is on the A's CRPs, not any D's
+ * 2. BreakPUF(D,C) needs to be done during the protocol session
+ *
+ * Note: if modelling is possible, the protocol is completely broken
+ * (Model(D) is in A)
+ */
+lemma UnilateralAutentication_A:
+  "All A D x #t. Commit(A,D,x)@t  ==>
+    (
+      (   
+       Ex G  #j . Run(D,G,x)@j & j<t 
+       & not (Ex E F #k. Commit(E,F,x)@k & not (#k = #t))
+      )
+    | 
+      Ex C r . x = <'DtoA',C,r>
+      &
+      (
+        (Ex #i. RevealCRP(A,D,C)@i & i<t) // It is necessary that A reveals the CRP!
+        |
+        (Ex #i. Model(D)@i & i<t)
+        |
+        (Ex y #w #k . w<k & k<t           // PUF should be attacked during the session
+          & Run(A,D,y)@w & y = <'AtoD',C,r> 
+          & BreakPUF(D,C)@k 
+        )
+      )
+    )"
+
+end
+
