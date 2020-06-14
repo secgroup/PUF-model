@@ -1,0 +1,225 @@
+/******************************************************************************
+ * Mutual authentication based on stong PUFs and hashes - no noise
+ *
+ * check with:
+ * tamarin-prover --prove PUF_strong_mutual.spthy
+ ******************************************************************************/
+
+theory PUF_strong_mutual
+
+begin
+
+// PUF is private
+functions: spuf/2 [private]
+
+builtins: hashing
+
+/*
+ * Strong PUF model
+ */
+rule PUF:
+  [ PUFin(D,c) ]   --[ PUF(D,c)   ]-> [ PUFout(D, c, spuf(D,c))   ]
+
+rule CRP:
+  [ CRPin(A,D), Fr(~c) ] --[ CRP(A,D,~c) ]-> [ !CRPout(A,D,~c,spuf(D,~c)) ]
+
+rule BreakPUF:
+  [ In(<D,c>) ] --[ BreakPUF(D,c) ]-> [ Out(spuf(D,c)) ]
+
+rule RevealCRP:
+  [ !CRPout(A,D,c,p) ] --[ RevealCRP(A,D,c) ]-> [ Out(<c,p>) ]
+
+rule Modeling:
+  [ In(<D,c,spuf(D,c1)>) ] --[ Model(D) ]-> [ Out(spuf(D,c)) ]
+
+
+/*
+ * Hash-based mutual authentication based on strong PUFs
+ * For strong agreement it is necessary that A is included in the hash.
+ * The PUF challenge plays the role of first nonce n
+ *
+ * A -> D: c
+ * D -> A: m,h(A,spuf(D,c),m)
+ * A -> D: h(spuf(D,c),m)
+ *
+ */
+
+rule BuildWeakCRPs:
+  [  ] --> [ CRPin($A,$D) ]    // builds CRPs for Server-Device pairs
+
+rule Alice0:
+  [ ] --> [ Alice0($A) ]
+
+rule Alice1:
+  [ Alice0(A),!CRPout(A,D,c,r) ] 
+  --[ Start(A,D,c) ]->  
+  [ Out(<A,D,c>), Alice2(A,D,c,r) ]
+
+rule Alice2:
+  [ Alice2(A,D,c,r), In(<D,A,m,h(A,r,m)>) ] 
+  --[ Run(A,D,<'AtoD',c,m>), Commit(A,D,<'DtoA',c,m>) ]-> 
+  [ Out(<A,D,h(r,m)>) ]
+
+rule Don0:
+  [ ] --> [ Don0($D) ]
+  
+rule Don1:
+  [ Don0(D),In(<A,D,c>), Fr(~m) ] 
+  --[ Run(D,A,<'DtoA',c,~m>) ]-> 
+  [ PUFin(D,c), Don2(D,A,c,~m) ]
+
+rule Don2:
+  [ Don2(D,A,c,m), PUFout(D,c,r) ] --> 
+  [ Out(<D,A,m,h(A,r,m)>), Don3(D,A,r,c,m) ]
+
+rule Don3:
+  [ Don3(D,A,r,c,m), In(<A,D,h(r,m)>) ]
+  --[ Commit(D,A,<'AtoD',c,m>) ]-> 
+  [ ]
+
+
+// ======================================
+
+/* 
+ * Initialization is before deployment
+ */
+restriction resCRPbeforePUF:
+  "All A D c1 c2 #i #j. CRP(A,D,c1)@i & PUF(D,c2)@j ==> i < j"
+
+/*
+ * CRPs are not reused
+ */
+restriction resCRPnotReuse:
+  "All A D x #i #j. Run(A,D,x)@i & Run(A,D,x)@j & (Ex c r. x = <'AtoD',c,r>) ==> #i = #j"
+
+/*
+ * sanity check: the protocol can commit in both directions
+ */
+lemma Sanity:
+  exists-trace
+  "
+  Ex A D c r #i. Commit(A,D,<'DtoA',c,r>)@i
+  &
+  Ex A D c r #i. Commit(A,D,<'AtoD',c,r>)@i
+  &
+  not (Ex A D c #k. RevealCRP(A,D,c)@k) 
+  & 
+  not (Ex D c #k. BreakPUF(D,c)@k)
+  & 
+  not (Ex D #k. Model(D)@k)
+  "
+
+/*
+ * Helper lemma stating that Modeling requires another attack to 
+ * intercept one PUF value. This is similar to the Secrecy_A
+ * property below. Interestingly, without this lemma next proofs
+ * do not converge.
+ */
+lemma modelPUF [use_induction,reuse]:
+  "All D #t . Model(D)@t ==> 
+    (Ex a c #i.RevealCRP(a,D,c)@i & i<t ) // CRP for D is revealed by one server
+    |
+    (Ex c #i.BreakPUF(D,c)@i & i<t) // PUF for D is broken
+  "
+
+/*
+ * Property: Secrecy of PUF with respect to A
+ * with A = {BreakPUF(D,c), RevealCRP(a,D,c)}
+ *
+ * Intuition:
+ * puf values are only leaked if some CRP is explicity revealed or 
+ * if puf has been broken.
+ *
+ * Note: Modelling is not possible without at least one PUF value. This
+ * is why we quantify over all possibles c's
+ */
+lemma Secrecy_A [use_induction,reuse]:
+  "All D p c #t. K(p)@t & p = spuf(D,c) ==> 
+    (Ex a c #i.RevealCRP(a,D,c)@i & i<t ) // CRP for D is revealed by one server
+    |
+    (Ex c #i.BreakPUF(D,c)@i & i<t) // PUF for D is broken
+    "
+
+/*
+ * The following property is the same that we checked for weak PUFs!
+ * We use A = {BreakPUF(D,c), RevealCRP(a,D,c)} as for secrecy.
+ */
+lemma MutualAuthentication_A:
+  "All B C x #i. Commit(B,C,x)@i ==>
+  (
+    (Ex #j. Run(C,B,x)@j
+      & j<i 
+      & not (Ex E G #k. Commit(E,G,x) @k & not (#k = #i)))
+    | ( 
+        (Ex n m. x = <'DtoA',n,m>) & // C is the Device
+        (
+          (Ex G c #r. RevealCRP(G,C,c)@r & r<i) // Need generic G if we don't add Model
+            |
+          (Ex c #r. BreakPUF(C,c)@r & r<i)
+        )
+      )  
+    | (
+        (Ex n m. x = <'AtoD',n,m>) & // B is the device
+        (
+          (Ex E c #r. RevealCRP(E,B,c)@r & r<i) // It is enough that one party E that registered B reveals the CRP
+            |
+          (Ex c #r. BreakPUF(B,c)@r & r<i)
+        )
+      )  
+  )
+  "
+
+
+/* 
+ * This is the stronger refined property
+ *
+ * it holds for sets 
+ * A1 = {BreakPUF(D,c), RevealCRP(a,D,c)}
+ * A2 = {BreakPUF(D,X), RevealCRP(a,D,X)}
+ */
+lemma MutualAutentication_A1_A2:
+  "All B C x y c m  #t. Commit(B,C,x)@t & x = <y,c,m> ==>
+  (
+    (Ex #j. Run(C,B,x)@j & j<t 
+      & not (Ex E F #k. Commit(E,F,x)@k & not (#k = #t)))
+    | 
+      ( 
+        y = 'DtoA' & // C is the Device
+        (
+          (
+            (Ex #r. Model(C)@r & r<t)  & 
+            (
+              (Ex E c2 #r. RevealCRP(E,C,c2)@r & r<t ) // It is enough that one party E that registered C reveals one CRP
+                |
+              (Ex c2 #r. BreakPUF(C,c2)@r & r<t )
+            )
+          )
+          |
+          (Ex  #r. RevealCRP(B,C,c)@r & r<t) // It is necessary that B revels its CRP!
+            |
+          (Ex  #k #w. w<k & k<t & Start(B,C,c)@w & BreakPUF(C,c)@k  )
+        )
+      )  
+    | 
+      (
+        y = 'AtoD' & // B is the device
+        (
+          (
+            (Ex #r. Model(B)@r & r<t)  & 
+            (
+              (Ex E c2 #r. RevealCRP(E,B,c2)@r & r<t ) // It is enough that one party E that registered B reveals one CRP
+                |
+              (Ex c2 #r. BreakPUF(B,c2)@r & r<t )
+            )
+          )
+          |
+          (Ex E  #r. RevealCRP(E,B,c)@r & r<t) // It is enough that one party E that registered B reveals the CRP
+            |
+          (Ex  #r. BreakPUF(B,c)@r & r<t)
+        )
+      ) 
+  )
+  "
+
+end
+
