@@ -122,6 +122,24 @@ lemma Sanity:
   "
 
 /*
+ * sanity check: the protocol can commit twice DtoA
+ */
+// lemma Sanity2:
+//   exists-trace
+//   "
+//   Ex A D c1 c2 r1 r2 #i #j. Commit(A,D,<'DtoA',c1,r1>)@i & Commit(A,D,<'DtoA',c2,r2>)@j & not #i=#j
+//   "
+
+/*
+ * sanity check: the protocol can commit twice AtoD
+ */
+// lemma Sanity3:
+//   exists-trace
+//   "
+//   Ex A D c1 c2 r1 r2 #i #j. Commit(A,D,<'AtoD',c1,r1>)@i & Commit(A,D,<'AtoD',c2,r2>)@j & not #i=#j  
+//   "
+
+/*
  * Property: Secrecy of PUF with respect to A
  * with A = {BreakPUF(D), RevealCRP(a,D), BreakGen(D)}
  *
