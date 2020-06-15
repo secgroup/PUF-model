@@ -20,15 +20,14 @@ builtins: hashing
 rule PUF:
   [ PUFin(D,c) ]   --[ PUF(D,c)   ]-> [ PUFout(D, c, spuf(D,c))   ]
 
-// Note: wrt the CSF paper we have remove the unnecessary ! in CRPout
 rule CRP:
-  [ CRPin(A,D), Fr(~c) ] --[ CRP(A,D,~c) ]-> [ CRPout(A,D,~c,spuf(D,~c)) ]
+  [ CRPin(A,D), Fr(~c) ] --[ CRP(A,D,~c) ]-> [ !CRPout(A,D,~c,spuf(D,~c)) ]
 
 rule BreakPUF:
   [ In(<D,c>) ] --[ BreakPUF(D,c) ]-> [ Out(spuf(D,c)) ]
 
 rule RevealCRP:
-  [ CRPout(A,D,c,p) ] --[ RevealCRP(A,D,c) ]-> [ Out(<c,p>) ]
+  [ !CRPout(A,D,c,p) ] --[ RevealCRP(A,D,c) ]-> [ Out(<c,p>) ]
 
 rule Modeling:
   [ In(<D,c,spuf(D,c1)>) ] --[ Model(D) ]-> [ Out(spuf(D,c)) ]
@@ -52,7 +51,7 @@ rule Alice0:
   [ ] --> [ Alice0($A) ]
 
 rule Alice1:
-  [ Alice0(A),CRPout(A,D,c,r) ] 
+  [ Alice0(A),!CRPout(A,D,c,r) ] 
   --[ Start(A,D,c) ]->  
   [ Out(<A,D,c>), Alice2(A,D,c,r) ]
 
@@ -83,11 +82,15 @@ rule Don3:
 
 /* 
  * Initialization is before deployment
- *
- * NOTE: lemmas hold even without this restriction
  */
 restriction resCRPbeforePUF:
   "All A D c1 c2 #i #j. CRP(A,D,c1)@i & PUF(D,c2)@j ==> i < j"
+
+/*
+ * CRPs are not reused
+ */
+restriction resCRPnotReuse:
+  "All A D x #i #j. Run(A,D,x)@i & Run(A,D,x)@j & (Ex c r. x = <'AtoD',c,r>) ==> #i = #j"
 
 /*
  * sanity check: the protocol can commit in both directions
@@ -106,24 +109,6 @@ lemma Sanity:
   not (Ex D #k. Model(D)@k)
   "
 
-/*
- * sanity check: the protocol can commit twice DtoA
- */
-// lemma Sanity2:
-//   exists-trace
-//   "
-//   Ex A D c1 c2 r1 r2 #i #j. Commit(A,D,<'DtoA',c1,r1>)@i & Commit(A,D,<'DtoA',c2,r2>)@j & not i=j
-//   "
-
-/*
- * sanity check: the protocol can commit twice AtoD
- */
-// lemma Sanity3:
-//   exists-trace
-//   "
-//   Ex A D c1 c2 r1 r2 #i #j. Commit(A,D,<'AtoD',c1,r1>)@i & Commit(A,D,<'AtoD',c2,r2>)@j & not i=j  
-//   "
-  
 /*
  * Helper lemma stating that Modeling requires another attack to 
  * intercept one PUF value. This is similar to the Secrecy_A
